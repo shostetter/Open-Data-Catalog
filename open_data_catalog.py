@@ -7,6 +7,8 @@ import zipfile
 import subprocess
 import shlex
 import tqdm
+import requests
+import shutil
 
 
 
@@ -105,6 +107,32 @@ def query(conn, query_string):
         df = None
     del cur
     return df
+
+
+#######################################################################
+#  get data from web
+#######################################################################
+
+def download_file(url, dest_name=None):
+    """
+    downloads file from url to folder
+    :param url: url for data source
+    :param download_path: directory where output data will be saved
+    :param dest_name: file name for downloaded file, defaults to none which will then use name from path
+    :return: file name of downloded data
+    """
+
+    # parse download url path for file name (if not provided)
+    if not dest_name:
+        dest_name = url.split('/')[-1]
+
+    with requests.get(url, stream=True) as r:
+        with open(os.path.join(DOWNLOAD_PATH, dest_name), 'wb') as f:
+            shutil.copyfileobj(r.raw, f)
+
+    print(f'Downloaded {dest_name}...')
+    return dest_name
+
 
 #######################################################################
 #  Load data into postgres database
