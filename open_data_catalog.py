@@ -6,6 +6,7 @@ import pandas as pd
 import zipfile
 import subprocess
 import shlex
+import tqdm
 
 
 
@@ -108,6 +109,132 @@ def query(conn, query_string):
 #######################################################################
 #  Load data into postgres database
 #######################################################################
+def set_up_table(db_conn, zip_path, schema, table, table_schema_src, overwrite=True):
+    """
+    Sets up empty table in the database bases on input file
+    :param db_conn: database connection
+    :param zip_path: path to zip file containing csv data
+    :param schema: database schema to write to
+    :param table: database table to write to
+    :param table_schema_src:sample csv to use to construct the database table
+    :param overwrite: optional flag to overwrite existing table if it exists
+    :return: None
+    """
+    # read in csv with pandas
+    # was going to get datatypes and names, but everything looks like int so just need names
+    with zipfile.ZipFile(zip_path) as z:
+        with z.open(table_schema_src) as f:
+            df = pd.read_csv(f)
+
+    # Parse df for schema - seems to only be float and int types, but int makes more sense and is simpler
+    input_schema = list()  # list of column names and column datatypes
+    for col in df.dtypes.iteritems():
+        col_name, col_type = col
+        input_schema.append([col_name, 'int'])
+
+    # Create table in database
+    qry = "CREATE TABLE {s}.{t} ({cols})".format(
+        s=schema, t=table,
+        cols=str(['"' + str(i[0]) + '" ' + i[1] for i in input_schema])[1:-1].replace("'", "")
+    )
+
+    if overwrite:
+        query(db_conn, f"drop table if exists {schema}.{table}")
+    print(f'table ({table}) created' )
+
+
+def import_csv(file_path, dest_scehma, dest_table, zip=False, quiet=False):
+    """
+    Imports a csv file into database
+    :param file_path: path to csv file to import
+    :param dest_scehma: database schema to write to
+    :param dest_table: table name to insert data into
+    :param zip: boolean for if the source file is in a compressed zip file
+    :return: None
+    """
+
+    if zip:
+        file_path = "/vsizip/" + file_path
+
+    cmd = f"""
+        ogr2ogr -f "PostgreSQL" 
+        PG:"host={HOST} 
+        user={USER}
+        dbname={DATABASE} 
+        password={PASSWORD} 
+        port={PORT}" 
+        "{file_path}" 
+        -oo EMPTY_STRING_AS_NULL=YES 
+        -nln "{dest_scehma}.{dest_table}" 
+        -append
+    """
+    try:
+        ogr_response = subprocess.check_output(shlex.split(cmd.replace('\n', ' ').replace('\\', '/')), stderr=subprocess.STDOUT)
+        print(ogr_response)
+    except subprocess.CalledProcessError as e:
+        print("Ogr2ogr Output:\n", e.output)
+    if not quiet:
+        print(f'csv file {file_path} imported into database...\n')
+
+
+def import_csvs_from_zip(db_conn, schema, table, file_path, sample_file="C2011_ccaa01_Indicadores.csv", overwrite=True):
+    """
+    Import census csv data from zip file. Assumes all csv have the same structure and naming conventions.
+    This will create a new table in the database and populate it will the csv data.
+
+    :param db_conn: database connection
+    :param schema: database schema to write to
+    :param table: database table to write to
+    :param file_path: path to source csv file
+    :param sample_file: name of csv file to use for database table schema
+    :param overwrite: flag to overwrite table in database if it exists
+    :return: None
+    """
+    print('Importing csv files into database...')
+    set_up_table(db_conn, file_path, schema, table, sample_file, overwrite=overwrite)
+
+    for i in tqdm.tqdm(range(1, 20)):
+        fle = os.path.join(file_path, f'C2011_ccaa{i:02}_Indicadores.csv')
+        import_csv(fle, schema, table, zip=True, quiet=True)
+
+    df = query(db_conn, f"select count(*) cnt from {schema}.{table}")
+    print(f'Added {df.cnt.values[0]} rows to {schema}.{table}\n')
+
+
+def import_shapefile(shapefile, schema='public', table='muni', zip=True):
+    """
+    Imports shapefile to database.
+    :param shapefile: path to shapefile
+    :param schema: database schema to write to
+    :param table: database table to write to
+    :param zip: optional flag for if the shapefile is in a zip file
+    :return: None
+    """
+    if zip:
+        shapefile = "/vsizip/"+shapefile
+
+    # If needed convert to multipolygon
+    perc = '-nlt MultiPolygon -lco PRECISION=no'
+
+    cmd = f"""ogr2ogr 
+        -overwrite -progress 
+        -f "PostgreSQL" 
+        PG:"host=localhost 
+        port={PORT} 
+        dbname={DATABASE} 
+        user={USER} 
+        password={PASSWORD}" 
+        "{shapefile}" 
+        -nln {schema}.{table} 
+        {perc}
+    """.replace('\n', ' ')
+
+    try:
+        ogr_response = subprocess.check_output(shlex.split(cmd.replace('\n', ' ')), stderr=subprocess.STDOUT)
+        print(ogr_response)
+    except subprocess.CalledProcessError as e:
+        print ("Ogr2ogr Output:\n", e.output)
+
 
 #######################################################################
 #  Set up data for analysis questions
