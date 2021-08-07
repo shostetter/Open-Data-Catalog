@@ -1,5 +1,11 @@
 import os
 import configparser
+import getpass
+import psycopg2
+import pandas as pd
+import zipfile
+import subprocess
+import shlex
 
 
 
@@ -52,12 +58,56 @@ DOWNLOAD_PATH = config.get('DOWNLOAD', 'DOWNLOAD_PATH')
 #######################################################################
 # helper functions for working with the data base
 #######################################################################
+def db_connect():
+    """
+    Creates connection to postgres database
+    :return: database connection
+    """
+    global USER
+    global PASSWORD
+    # if username / password not passed, get from user input
+    if not USER:
+        USER = input('User name: \n')
+    if not PASSWORD:
+        PASSWORD = getpass.getpass('Password: \n')
+    params = {
+        'dbname': DATABASE,
+        'user': USER,
+        'password': PASSWORD,
+        'host': HOST,
+        'port': PORT
+    }
+    conn = psycopg2.connect(**params)
+    print('Connected to database')
+    return conn
 
+
+def query(conn, query_string):
+    """
+    Function to run queries in postgres.
+    If query returns data (ie. select query) data is returned as pandas DataFrame
+    :param conn: database connection (return from db_conect)
+    :param query_string: query string to be sent to database
+    :return: pandas DataFrame if data is available
+    """
+    # create cursor
+    cur = conn.cursor()
+    cur.execute(query_string)
+    conn.commit()
+
+    # check if data is available in cursor
+    if cur.description:
+        columns = [desc[0] for desc in cur.description]
+        data = cur.fetchall()
+        df = pd.DataFrame(data, columns=columns)
+    else:
+        df = None
+    del cur
+    return df
 
 #######################################################################
 #  Load data into postgres database
 #######################################################################
-
 
 #######################################################################
 #  Set up data for analysis questions
