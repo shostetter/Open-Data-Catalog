@@ -267,3 +267,112 @@ def import_shapefile(shapefile, schema='public', table='muni', zip=True):
 #######################################################################
 #  Set up data for analysis questions
 #######################################################################
+
+def create_mat_view(db_conn, overwrite=True):
+    """
+    Creates materialized view of census status, based on the analysis questions provided.
+    If additional analyses are required this may need to be altered
+    :param db_conn: daatbase connection
+    :param overwrite: flag to overwrite existing mat view if it exists
+    :return:
+    """
+    if overwrite:
+        query(db_conn, "DROP MATERIALIZED VIEW IF EXISTS census_stats;")
+    qry = """
+    CREATE MATERIALIZED VIEW census_stats AS
+    SELECT 
+        c.cpro::int as prov_id, 
+        id_ine::int muni_id, 
+        m.rotulo as muni_name,
+        sum(c.t1_1::int) as total_pop, 
+        sum(t12_5::int) as ed_uni_pop,
+        st_area_sh, -- assume this is square hectares 
+        -- not sure this is right but gets close to sq km numbers found on wikipedia
+        st_area(wkb_geometry)*10000 as sq_m, 
+        wkb_geometry as geom
+    FROM public.census_data_2011 c
+    JOIN public.muni m
+        ON c.cpro::varchar||lpad(cmun::varchar, 3, '0')=m.id_ine
+    GROUP BY  
+        id_ine, 
+        c.cpro, 
+        m.rotulo, 
+        st_area_sh, 
+        wkb_geometry;
+
+    CREATE UNIQUE INDEX census_stats_muni_idx
+      ON census_stats (muni_id);
+    """
+    query(db_conn, qry)
+
+
+def questions(db_conn):
+    """
+    Queries for the analysis questions provided
+    :param db_conn: database connection
+    :return:
+    """
+    # - Get the population density of each of the municipalities of Madrid
+    q1 = """
+        SELECT 
+            muni_id, 
+            muni_name, 
+            total_pop, 
+            st_area_sh, 
+            total_pop/st_area_sh::float as pop_density 
+        FROM census_stats
+        WHERE prov_id = 28 
+    """
+    q1_results = query(db_conn, q1)
+
+    # - Get the names of the 10 provinces with the highest percentage of
+    # people with university degrees (third-level studies)
+    q2 = """
+            SELECT 
+                prov_id, 
+                sum(ed_uni_pop) university_pop, 
+                sum(total_pop) total_pop, 
+                100*(sum(ed_uni_pop)/sum(total_pop)::float) university_pct,
+                rank() over (order by sum(ed_uni_pop)/sum(total_pop)::float desc) university_pop_rank
+            FROM census_stats
+            GROUP by prov_id
+            LIMIT 10
+        """
+    q2_results = query(db_conn, q2)
+    return q1_results, q2_results
+
+#######################################################################
+#  Main run code
+#######################################################################
+
+def main():
+    """
+    Runs for codeset
+    :return: None
+    """
+
+    urls = [r'http://www.ine.es/censos2011_datos/indicadores_seccen_rejilla.xls',
+            r'http://www.ine.es/censos2011_datos/indicadores_seccion_censal_csv.zip',
+            r'http://centrodedescargas.cnig.es/CentroDescargas/descargaDir?secDescDirLA=114023&pagActual=1&numTotReg=5&codSerieSel=CAANE']
+
+    db_conn = db_connect()
+    for url in urls[:-1]:
+        download_file(url)
+    download_file(urls[-1], 'geo.zip')
+
+    import_csvs_from_zip(db_conn, 'public', 'census_data_2011',
+                         os.path.join(DOWNLOAD_PATH, 'indicadores_seccion_censal_csv.zip'))
+
+    import_shapefile(os.path.join(DOWNLOAD_PATH, 'geo.zip/SIANE_CARTO_BASE_S_3M/anual/20110101/se89_3_admin_muni_a_x.shp'),
+                     schema='public', table='muni', zip=True)
+    create_mat_view(db_conn)
+    q1, q2 = questions(db_conn)
+    print("Population density of each of the municipalities of Madrid (limited to 10)")
+    print(q1.head(10))
+
+    print("\n10 provinces with the highest percentage of people with university degrees")
+    print(q2)
+
+
+if __name__ == '__main__':
+    main()
