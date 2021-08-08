@@ -167,7 +167,7 @@ def set_up_table(db_conn, zip_path, schema, table, table_schema_src, overwrite=T
     )
 
     if overwrite:
-        query(db_conn, f"drop table if exists {schema}.{table}")
+        query(db_conn, f"DROP TABLE IF EXISTS {schema}.{table} CASCADE")
     print(f'table ({table}) created' )
 
 
@@ -277,7 +277,7 @@ def create_mat_view(db_conn, overwrite=True):
     :return:
     """
     if overwrite:
-        query(db_conn, "DROP MATERIALIZED VIEW IF EXISTS census_stats;")
+        query(db_conn, "DROP MATERIALIZED VIEW IF EXISTS census_stats CASCADE;")
     qry = """
     CREATE MATERIALIZED VIEW census_stats AS
     SELECT 
